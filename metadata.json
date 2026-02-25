@@ -1,0 +1,8 @@
+{
+  "name": "Telegram Clone AI Chat",
+  "description": "A high-fidelity Telegram-style chat application with customizable AI personas, backgrounds, and profile pictures, powered by Gemini 3 Flash.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
