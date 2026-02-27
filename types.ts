@@ -12,6 +12,8 @@ export interface Message {
 
 export interface ChatSettings {
   aiName: string;
+  aiAge: string;
+  userName: string;
   aiProfilePic: string;
   backgroundGradient: string;
   persona: PersonaType;

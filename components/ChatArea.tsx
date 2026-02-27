@@ -5,11 +5,13 @@ import { Message } from '../types';
 interface ChatAreaProps {
   messages: Message[];
   aiProfilePic: string;
+  ttsEnabled: boolean;
   onPlayAudio?: (msg: Message) => void;
+  onRetryAudio?: (msg: Message) => void;
   onDeleteMessage?: (msgId: string) => void;
 }
 
-const ChatArea: React.FC<ChatAreaProps> = ({ messages, aiProfilePic, onPlayAudio, onDeleteMessage }) => {
+const ChatArea: React.FC<ChatAreaProps> = ({ messages, aiProfilePic, ttsEnabled, onPlayAudio, onRetryAudio, onDeleteMessage }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
 
@@ -102,14 +104,30 @@ const ChatArea: React.FC<ChatAreaProps> = ({ messages, aiProfilePic, onPlayAudio
                 )}
                 
                 <div className="flex items-start gap-2">
-                  {msg.text && <div className="px-1 leading-relaxed whitespace-pre-wrap flex-1">{msg.text}</div>}
-                  {msg.audioBase64 && (
+                  {msg.text ? (
+                    <div className="px-1 leading-relaxed whitespace-pre-wrap flex-1">{msg.text}</div>
+                  ) : (
+                    !msg.image && !msg.audioBase64 && (
+                      <div className="px-1 leading-relaxed italic opacity-40 flex-1">...</div>
+                    )
+                  )}
+                  {msg.audioBase64 ? (
                     <button 
                       onClick={(e) => { e.stopPropagation(); onPlayAudio?.(msg); }}
                       className={`mt-1 p-1 transition-colors ${msg.sender === 'user' ? 'text-green-600 hover:text-green-800' : 'text-blue-400 hover:text-blue-600'}`}
                     >
                       <i className="fas fa-play-circle text-lg"></i>
                     </button>
+                  ) : (
+                    msg.sender === 'ai' && ttsEnabled && msg.text && (
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); onRetryAudio?.(msg); }}
+                        className="mt-1 p-1 text-gray-300 hover:text-blue-400 transition-colors"
+                        title="تولید مجدد صدا"
+                      >
+                        <i className="fas fa-volume-up text-lg"></i>
+                      </button>
+                    )
                   )}
                 </div>
                 

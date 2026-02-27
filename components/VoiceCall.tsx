@@ -27,16 +27,23 @@ const VoiceCall: React.FC<VoiceCallProps> = ({ name, profilePic, chatService, on
   const [aiTranscript, setAiTranscript] = useState<string>("");
   const [micLevel, setMicLevel] = useState(0);
   const [isAiResponding, setIsAiResponding] = useState(false);
+  const [isPttMode, setIsPttMode] = useState(false);
+  const [isPttActive, setIsPttActive] = useState(false);
+  const pttTrailingSilenceRef = useRef<number>(0); // Counter for trailing silence frames
   const proactiveTimerRef = useRef<any>(null);
   const retryCaptureRef = useRef<number>(0);
   
   const statusRef = useRef(status);
   const isMutedRef = useRef(isMuted);
   const isAiRespondingRef = useRef(isAiResponding);
+  const isPttModeRef = useRef(isPttMode);
+  const isPttActiveRef = useRef(isPttActive);
 
   useEffect(() => { statusRef.current = status; }, [status]);
   useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
   useEffect(() => { isAiRespondingRef.current = isAiResponding; }, [isAiResponding]);
+  useEffect(() => { isPttModeRef.current = isPttMode; }, [isPttMode]);
+  useEffect(() => { isPttActiveRef.current = isPttActive; }, [isPttActive]);
   
   const sessionRef = useRef<any>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -93,7 +100,12 @@ const VoiceCall: React.FC<VoiceCallProps> = ({ name, profilePic, chatService, on
 
   const cleanup = () => {
     if (sessionRef.current) {
-      try { sessionRef.current.close(); } catch(e) {}
+      try { 
+        if (typeof sessionRef.current.close === 'function') {
+          sessionRef.current.close(); 
+        }
+      } catch(e) {}
+      sessionRef.current = null;
     }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
@@ -116,21 +128,35 @@ const VoiceCall: React.FC<VoiceCallProps> = ({ name, profilePic, chatService, on
   };
 
   const schedulePlayback = () => {
-    if (!audioContextRef.current) return;
+    if (!audioContextRef.current || audioQueueRef.current.length === 0) return;
     
+    // If already processing, the while loop will pick up new chunks
+    // or the next call will handle it. But we need to be careful.
+    if (isProcessingQueueRef.current) return;
+
     const ctx = audioContextRef.current;
     if (ctx.state === 'suspended') {
       ctx.resume();
     }
 
-    // Schedule as many chunks as possible from the queue
-    while (audioQueueRef.current.length > 0) {
-      isProcessingQueueRef.current = true;
-      setIsAiResponding(true);
-      
+    setIsAiResponding(true);
+    isProcessingQueueRef.current = true;
+
+    const processQueue = () => {
+      if (audioQueueRef.current.length === 0) {
+        // Check again after a short delay to be sure no new chunks arrived during the transition
+        setTimeout(() => {
+          if (audioQueueRef.current.length === 0) {
+            setIsAiResponding(false);
+            isProcessingQueueRef.current = false;
+          } else {
+            processQueue();
+          }
+        }, 100);
+        return;
+      }
+
       const pcmData = audioQueueRef.current.shift()!;
-      
-      // Gemini sends 24kHz audio
       const buffer = ctx.createBuffer(1, pcmData.length, 24000);
       const channelData = buffer.getChannelData(0);
       for (let i = 0; i < pcmData.length; i++) {
@@ -150,34 +176,20 @@ const VoiceCall: React.FC<VoiceCallProps> = ({ name, profilePic, chatService, on
       source.connect(gainNodeRef.current);
 
       const currentTime = ctx.currentTime;
-      
-      // If the scheduled time is too far in the past or too far in the future, reset it
-      // We use a 0.2s initial buffer for better stability
-      if (nextStartTimeRef.current < currentTime || nextStartTimeRef.current > currentTime + 1.5) {
-        nextStartTimeRef.current = currentTime + 0.2;
+      if (nextStartTimeRef.current < currentTime || nextStartTimeRef.current > currentTime + 5.0) {
+        nextStartTimeRef.current = currentTime + 0.1;
       }
       
-      const startTime = Math.max(currentTime + 0.05, nextStartTimeRef.current);
-      
+      const startTime = nextStartTimeRef.current;
       source.start(startTime);
-      nextStartTimeRef.current = startTime + buffer.duration;
+      nextStartTimeRef.current += buffer.duration;
 
-      // When the last scheduled buffer ends, we check if there's more
       source.onended = () => {
-        if (audioQueueRef.current.length === 0) {
-          // Only stop responding state if no more audio is coming
-          // We add a small delay to keep the UI stable
-          setTimeout(() => {
-            if (audioQueueRef.current.length === 0) {
-              isProcessingQueueRef.current = false;
-              setIsAiResponding(false);
-            }
-          }, 500);
-        } else {
-          schedulePlayback();
-        }
+        processQueue();
       };
-    }
+    };
+
+    processQueue();
   };
 
   const ringingRef = useRef<{ osc1: OscillatorNode, osc2: OscillatorNode, gain: GainNode } | null>(null);
@@ -235,13 +247,13 @@ const VoiceCall: React.FC<VoiceCallProps> = ({ name, profilePic, chatService, on
   const startAudioCapture = async () => {
     try {
       if (!audioContextRef.current) {
-        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
       }
       
       const ctx = audioContextRef.current;
       console.log("AudioContext Sample Rate:", ctx.sampleRate);
       
-      if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
+      if (ctx.state === 'suspended') {
         await ctx.resume();
       }
       console.log("AudioContext State after resume:", ctx.state);
@@ -305,32 +317,83 @@ const VoiceCall: React.FC<VoiceCallProps> = ({ name, profilePic, chatService, on
         if (sessionRef.current && statusRef.current === 'connected' && !isMutedRef.current) {
           const inputData = e.inputBuffer.getChannelData(0);
           
-          // Check if we have actual audio signal
+          // Resample to 16kHz for Gemini Live API
+          const currentRate = ctx.sampleRate;
+          const targetRate = 16000;
+          const ratio = currentRate / targetRate;
+          const targetLength = Math.floor(inputData.length / ratio);
+          const pcmData = new Int16Array(targetLength);
+          
+          // PTT Logic: 
+          // 1. If PTT is active, send audio.
+          // 2. If PTT just became inactive, send a few frames of silence to trigger VAD.
+          // 3. Otherwise, send nothing (to keep the line quiet).
+          
+          let shouldSend = true;
+          let isSilence = false;
+
+          if (isPttModeRef.current) {
+            if (isPttActiveRef.current) {
+              // User is talking
+              pttTrailingSilenceRef.current = 15; // Prepare 15 frames (~960ms) of trailing silence
+              shouldSend = true;
+              isSilence = false;
+            } else if (pttTrailingSilenceRef.current > 0) {
+              // Sending trailing silence to trigger AI response
+              pttTrailingSilenceRef.current--;
+              shouldSend = true;
+              isSilence = true;
+            } else {
+              // Strictly idle - DO NOT SEND ANYTHING
+              shouldSend = false;
+            }
+          }
+
+          if (!shouldSend) {
+            setMicLevel(0);
+            return;
+          }
+
           let hasSignal = false;
-          const pcmData = new Int16Array(inputData.length);
-          for (let i = 0; i < inputData.length; i++) {
-            const sample = inputData[i];
-            // Even lower threshold for signal detection
-            if (Math.abs(sample) > 0.002) hasSignal = true;
-            // Boost input gain by 4.0x for even better hearing
-            pcmData[i] = Math.max(-1, Math.min(1, sample * 4.0)) * 0x7FFF;
+          for (let i = 0; i < targetLength; i++) {
+            const sample = inputData[Math.floor(i * ratio)];
+            
+            if (isSilence) {
+              pcmData[i] = 0;
+            } else {
+              // Extremely low threshold to ensure even whispers are caught
+              if (Math.abs(sample) > 0.0005) hasSignal = true;
+              // Boost input gain by 6.0x for better sensitivity
+              pcmData[i] = Math.max(-1, Math.min(1, sample * 6.0)) * 0x7FFF;
+            }
           }
           
           if (hasSignal) {
             (window as any).lastMicCheck = Date.now();
-            if (Math.random() < 0.05) console.log("Mic signal detected and sending...");
           }
 
           const uint8 = new Uint8Array(pcmData.buffer);
           
           try {
-            if (sessionRef.current && sessionRef.current.sendRealtimeInput) {
+            if (sessionRef.current && typeof sessionRef.current.sendRealtimeInput === 'function') {
               sessionRef.current.sendRealtimeInput({
                 media: { data: btoa(String.fromCharCode(...uint8)), mimeType: 'audio/pcm;rate=16000' }
               });
             }
           } catch (sendErr) {
             console.error("Error sending audio to Gemini:", sendErr);
+          }
+
+          // Update mic meter
+          if (!isSilence) {
+            let sum = 0;
+            for (let i = 0; i < inputData.length; i++) {
+              sum += inputData[i] * inputData[i];
+            }
+            const rms = Math.sqrt(sum / inputData.length);
+            setMicLevel(Math.min(100, rms * 500));
+          } else {
+            setMicLevel(0);
           }
         }
       };
@@ -429,7 +492,7 @@ const VoiceCall: React.FC<VoiceCallProps> = ({ name, profilePic, chatService, on
     const base64Data = canvas.toDataURL('image/jpeg', 0.7).split(',')[1];
 
     try {
-      if (sessionRef.current && sessionRef.current.sendRealtimeInput) {
+      if (sessionRef.current && typeof sessionRef.current.sendRealtimeInput === 'function') {
         sessionRef.current.sendRealtimeInput({
           media: { data: base64Data, mimeType: 'image/jpeg' }
         });
@@ -443,8 +506,8 @@ const VoiceCall: React.FC<VoiceCallProps> = ({ name, profilePic, chatService, on
   useEffect(() => {
     const initCall = async () => {
       try {
-        // Initialize AudioContext with 16kHz for better compatibility with Live API input
-        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+        // Initialize AudioContext with default sample rate
+        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
         playRingingSound();
 
         const session = await chatService.connectLive({
@@ -458,7 +521,10 @@ const VoiceCall: React.FC<VoiceCallProps> = ({ name, profilePic, chatService, on
             if (proactiveTimerRef.current) clearInterval(proactiveTimerRef.current);
             proactiveTimerRef.current = setInterval(() => {
               // Use refs to check current state inside the interval
-              if (statusRef.current === 'connected' && !isAiRespondingRef.current && !isMutedRef.current) {
+              if (sessionRef.current && statusRef.current === 'connected' && !isAiRespondingRef.current && !isMutedRef.current) {
+                // If PTT mode is on, only trigger if PTT is active (or maybe don't trigger at all in PTT mode to be safe)
+                if (isPttModeRef.current && !isPttActiveRef.current) return;
+                
                 console.log("Proactive AI heartbeat...");
                 triggerGreeting();
               }
@@ -466,7 +532,7 @@ const VoiceCall: React.FC<VoiceCallProps> = ({ name, profilePic, chatService, on
             
             // Trigger initial greeting by sending a small silent chunk after a short delay
             setTimeout(() => {
-              if (sessionRef.current && statusRef.current === 'connected') {
+              if (sessionRef.current && statusRef.current === 'connected' && typeof sessionRef.current.sendRealtimeInput === 'function') {
                 console.log("Sending initial wake-up signal...");
                 // Send a slightly longer buffer to ensure VAD triggers
                 const silentPCM = new Int16Array(2048);
@@ -474,62 +540,105 @@ const VoiceCall: React.FC<VoiceCallProps> = ({ name, profilePic, chatService, on
                 for(let i=0; i<silentPCM.length; i++) silentPCM[i] = (Math.random() - 0.5) * 10;
                 
                 const uint8 = new Uint8Array(silentPCM.buffer);
-                sessionRef.current.sendRealtimeInput({
-                  media: { data: btoa(String.fromCharCode(...uint8)), mimeType: 'audio/pcm;rate=16000' }
-                });
+                try {
+                  sessionRef.current.sendRealtimeInput({
+                    media: { data: btoa(String.fromCharCode(...uint8)), mimeType: 'audio/pcm;rate=16000' }
+                  });
+                } catch (e) {
+                  console.error("Error sending initial wake-up signal:", e);
+                }
               }
             }, 1000);
           },
           onmessage: (message: any) => {
             console.log("Live API Message:", message);
             
-            // 1. Handle Audio Data
-            if (message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data) {
-              const base64 = message.serverContent.modelTurn.parts[0].inlineData.data;
-              const binaryString = atob(base64);
-              const bytes = new Uint8Array(binaryString.length);
-              for (let i = 0; i < binaryString.length; i++) {
-                bytes[i] = binaryString.charCodeAt(i);
+            // Handle fatal errors or session issues
+            if (message.error) {
+              console.error("Live API Error Message:", message.error);
+              // Don't crash, just log and maybe end call if it's fatal
+              if (message.error.code === 400 || message.error.code === 403) {
+                handleEndCall();
               }
-              const pcmData = new Int16Array(bytes.buffer);
-              audioQueueRef.current.push(pcmData);
-              
-              // If the queue was empty, wait for a few more chunks before starting playback
-              // to build a small buffer and prevent choppiness
-              // Increased to 6 chunks for a more solid buffer
-              if (audioQueueRef.current.length >= 6 && !isProcessingQueueRef.current) {
-                schedulePlayback();
+              return;
+            }
+
+            // 1. Handle Audio Data
+            if (message.serverContent?.modelTurn?.parts) {
+              for (const part of message.serverContent.modelTurn.parts) {
+                if (part.inlineData?.data) {
+                  try {
+                    const base64 = part.inlineData.data;
+                    const binaryString = atob(base64);
+                    const arrayBuffer = new ArrayBuffer(binaryString.length);
+                    const bytes = new Uint8Array(arrayBuffer);
+                    for (let i = 0; i < binaryString.length; i++) {
+                      bytes[i] = binaryString.charCodeAt(i);
+                    }
+                    
+                    // Ensure alignment for Int16Array (must be even number of bytes)
+                    const alignedLength = arrayBuffer.byteLength - (arrayBuffer.byteLength % 2);
+                    const pcmData = new Int16Array(arrayBuffer.slice(0, alignedLength));
+                    audioQueueRef.current.push(pcmData);
+                    
+                    // Buffer at least 3 chunks before starting to prevent jitter, or just keep scheduling if already playing
+                    if (audioQueueRef.current.length >= 3 || isProcessingQueueRef.current) {
+                      schedulePlayback();
+                    } else {
+                      // Safety flush: if we don't reach 3 chunks quickly, play what we have
+                      setTimeout(() => {
+                        if (audioQueueRef.current.length > 0 && !isProcessingQueueRef.current) {
+                          schedulePlayback();
+                        }
+                      }, 150);
+                    }
+                  } catch (atobErr) {
+                    console.error("Error decoding audio base64:", atobErr);
+                  }
+                }
               }
             }
 
             // 2. Handle AI Text Output (Transcription of what AI is saying)
-            const aiText = message.serverContent?.modelTurn?.parts?.[0]?.text || 
-                           message.outputAudioTranscription?.text;
-            if (aiText) {
-              console.log("AI Text:", aiText);
-              setAiTranscript(aiText); // Show only current sentence as subtitle
+            let aiText = "";
+            if (message.serverContent?.modelTurn?.parts) {
+              for (const part of message.serverContent.modelTurn.parts) {
+                if (part.text) aiText += part.text;
+              }
+            } else if (message.outputAudioTranscription?.text) {
+              aiText = message.outputAudioTranscription.text;
+            }
+
+            if (aiText && aiText.trim()) {
+              // Filter out English meta-talk (e.g. "Initiating...", "I've noted...")
+              const isEnglishMeta = /^[A-Za-z\s\*\.\']{10,}/.test(aiText.trim());
+              if (!isEnglishMeta) {
+                console.log("AI Text:", aiText);
+                setAiTranscript(aiText); // Show only current sentence as subtitle
+              } else {
+                console.log("Filtered English meta-talk:", aiText);
+              }
             }
             
             // 3. Handle User Text Input (Transcription of what user is saying)
-            const userText = message.serverContent?.userTurn?.parts?.[0]?.text || 
-                             message.inputAudioTranscription?.text;
+            let userText = "";
+            if (message.serverContent?.userTurn?.parts) {
+              for (const part of message.serverContent.userTurn.parts) {
+                if (part.text) userText += part.text;
+              }
+            } else if (message.inputAudioTranscription?.text) {
+              userText = message.inputAudioTranscription.text;
+            }
             
-            if (userText) {
+            if (userText && userText.trim()) {
               console.log("User Text:", userText);
               setUserTranscript(userText);
             }
 
-            // 4. Handle Interruption
+            // 4. Handle Interruption (Disabled as per user request)
             if (message.serverContent?.interrupted) {
-              console.log("Interrupted!");
-              if (activeSourceRef.current) {
-                try { activeSourceRef.current.stop(); } catch(e) {}
-                activeSourceRef.current = null;
-              }
-              audioQueueRef.current = [];
-              nextStartTimeRef.current = 0;
-              setAiTranscript("");
-              setIsAiResponding(false);
+              console.log("Interruption received from server, but ignoring as per user request to finish sentence.");
+              // We don't stop the audio or clear the queue here anymore
             }
           },
           onclose: () => handleEndCall(),
@@ -557,7 +666,7 @@ const VoiceCall: React.FC<VoiceCallProps> = ({ name, profilePic, chatService, on
 
   const triggerGreeting = () => {
     handleInteraction();
-    if (sessionRef.current && statusRef.current === 'connected') {
+    if (sessionRef.current && statusRef.current === 'connected' && typeof sessionRef.current.sendRealtimeInput === 'function') {
       console.log("Triggering proactive greeting/wake-up...");
       // Send a burst of low-level noise to trigger AI response
       const silentPCM = new Int16Array(4096);
@@ -566,9 +675,13 @@ const VoiceCall: React.FC<VoiceCallProps> = ({ name, profilePic, chatService, on
         silentPCM[i] = (Math.random() - 0.5) * 30;
       }
       const uint8 = new Uint8Array(silentPCM.buffer);
-      sessionRef.current.sendRealtimeInput({
-        media: { data: btoa(String.fromCharCode(...uint8)), mimeType: 'audio/pcm;rate=16000' }
-      });
+      try {
+        sessionRef.current.sendRealtimeInput({
+          media: { data: btoa(String.fromCharCode(...uint8)), mimeType: 'audio/pcm;rate=16000' }
+        });
+      } catch (e) {
+        console.error("Error sending proactive greeting:", e);
+      }
     }
   };
 
@@ -693,6 +806,55 @@ const VoiceCall: React.FC<VoiceCallProps> = ({ name, profilePic, chatService, on
         )}
       </div>
 
+      {/* PTT Button for noise reduction */}
+      {status === 'connected' && isPttMode && (
+        <div className="relative z-30 flex flex-row items-center justify-center gap-8 animate-in fade-in zoom-in duration-500 mb-6">
+          <button 
+            onClick={handleEndCall}
+            className="w-16 h-16 rounded-full bg-red-500/20 hover:bg-red-500/40 border border-red-500/50 flex items-center justify-center transition-all active:scale-90 group"
+            title="قطع تماس"
+          >
+            <i className="fas fa-phone-slash text-red-500 text-xl transform rotate-[135deg] group-hover:scale-110 transition-transform"></i>
+          </button>
+
+          <div className="flex flex-col items-center">
+            <button
+              onMouseDown={() => { handleInteraction(); setIsPttActive(true); }}
+              onMouseUp={() => setIsPttActive(false)}
+              onTouchStart={(e) => { 
+                if (e.cancelable) e.preventDefault(); 
+                handleInteraction(); 
+                setIsPttActive(true); 
+              }}
+              onTouchEnd={(e) => { 
+                if (e.cancelable) e.preventDefault(); 
+                setIsPttActive(false); 
+              }}
+              onMouseLeave={() => setIsPttActive(false)}
+              className={`w-32 h-32 rounded-full flex flex-col items-center justify-center transition-all duration-200 shadow-2xl border-4 ${
+                isPttActive 
+                ? 'bg-orange-500 border-orange-300 scale-110 shadow-orange-500/50' 
+                : 'bg-white/10 border-white/20 hover:bg-white/20'
+              }`}
+            >
+              <i className={`fas fa-microphone text-4xl mb-1 ${isPttActive ? 'text-white animate-pulse' : 'text-white/60'}`}></i>
+              <span className="text-[10px] font-bold uppercase tracking-widest text-white/80">
+                {isPttActive ? 'در حال ضبط...' : 'نگه دارید'}
+              </span>
+            </button>
+            <p className="mt-3 text-[11px] text-white/50 font-medium">برای صحبت کردن نگه دارید</p>
+          </div>
+
+          <button 
+            onClick={() => setIsPttMode(false)}
+            className="w-16 h-16 rounded-full bg-blue-500/20 hover:bg-blue-500/40 border border-blue-500/50 flex items-center justify-center transition-all active:scale-90 group"
+            title="حالت خودکار"
+          >
+            <i className="fas fa-magic text-blue-400 text-xl group-hover:scale-110 transition-transform"></i>
+          </button>
+        </div>
+      )}
+
       <div className={`relative z-10 flex flex-col items-center w-full transition-all duration-500 ${isUserVideoOn ? 'gap-4 mb-6 mt-auto' : 'max-w-sm px-8 gap-8 mb-4'}`}>
         {/* Name and Timer at bottom for Video Mode */}
         {isUserVideoOn && (
@@ -706,6 +868,14 @@ const VoiceCall: React.FC<VoiceCallProps> = ({ name, profilePic, chatService, on
         )}
 
         <div className={`flex items-center justify-center w-full ${isUserVideoOn ? 'gap-3 px-2' : 'justify-between gap-4'}`}>
+          <button 
+            onClick={() => { handleInteraction(); setIsPttMode(!isPttMode); }}
+            className={`rounded-full flex items-center justify-center transition-all duration-300 ${isUserVideoOn ? 'w-11 h-11 text-lg' : 'w-16 h-16 text-2xl'} ${isPttMode ? 'bg-orange-500 text-white shadow-[0_0_15px_rgba(249,115,22,0.4)]' : 'bg-white/10 hover:bg-white/20'}`}
+            title={isPttMode ? "حالت خودکار" : "حالت دستی (واکی تاکی)"}
+          >
+            <i className={`fas ${isPttMode ? 'fa-hand-pointer' : 'fa-microphone-alt'}`}></i>
+          </button>
+
           <button 
             onClick={() => { handleInteraction(); setIsMuted(!isMuted); }}
             className={`rounded-full flex items-center justify-center transition-all duration-300 ${isUserVideoOn ? 'w-11 h-11 text-lg' : 'w-16 h-16 text-2xl'} ${isMuted ? 'bg-white text-slate-900' : 'bg-white/10 hover:bg-white/20'}`}

@@ -300,7 +300,7 @@ const InputArea: React.FC<InputAreaProps> = ({ onSend }) => {
                 />
               <div className="flex items-center">
                 <button 
-                  onClick={startCamera}
+                  onClick={() => startCamera()}
                   className="p-2 text-gray-400 hover:text-blue-500 transition-colors"
                   title="Camera"
                 >

@@ -39,9 +39,30 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ currentSettings, onSave, 
     }
   };
 
+  const [isCleared, setIsCleared] = useState(false);
+
+  const handleClearStorage = () => {
+    if (confirm("آیا از پاک کردن تمام داده‌ها و تاریخچه چت اطمینان دارید؟")) {
+      localStorage.clear();
+      setIsCleared(true);
+      setTimeout(() => {
+        window.location.reload();
+      }, 2000);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-300">
-      <div className="bg-white w-full max-w-md h-full sm:h-auto sm:max-h-[90vh] sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col">
+      <div className="bg-white w-full max-w-md h-full sm:h-auto sm:max-h-[90vh] sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col relative">
+        {isCleared && (
+          <div className="absolute inset-0 z-[100] bg-white/90 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-300">
+            <div className="w-20 h-20 bg-green-100 text-green-500 rounded-full flex items-center justify-center mb-6 animate-bounce">
+              <i className="fas fa-check text-4xl"></i>
+            </div>
+            <h3 className="text-2xl font-bold text-gray-900 mb-2">حافظه پاکسازی شد!</h3>
+            <p className="text-gray-500">تمام داده‌ها با موفقیت حذف شدند. برنامه در حال بازنشانی است...</p>
+          </div>
+        )}
         {/* Header like Telegram Profile */}
         <div className="relative h-48 shrink-0">
           <img 
@@ -71,19 +92,50 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ currentSettings, onSave, 
         <input type="file" ref={backgroundInputRef} hidden accept="image/*" onChange={(e) => handleFileChange(e, 'background')} />
 
         <div className="p-6 overflow-y-auto space-y-6 flex-1 custom-scrollbar bg-gray-50">
-          {/* AI Name Section */}
+          {/* AI & User Name Section */}
           <section>
             <label className="block text-[11px] font-bold text-gray-400 mb-2 uppercase tracking-tighter">اطلاعات کاربری</label>
-            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 space-y-4">
                <div className="flex items-center gap-3">
-                 <i className="fas fa-user text-gray-400 w-5"></i>
-                 <input 
-                  type="text" 
-                  placeholder="نام هوش مصنوعی"
-                  className="flex-1 bg-transparent border-none focus:ring-0 text-sm font-medium outline-none"
-                  value={settings.aiName}
-                  onChange={(e) => setSettings({...settings, aiName: e.target.value})}
-                />
+                 <i className="fas fa-robot text-blue-400 w-5"></i>
+                 <div className="flex-1">
+                   <p className="text-[10px] text-gray-400 mb-1">نام هوش مصنوعی</p>
+                   <input 
+                    type="text" 
+                    placeholder="نام هوش مصنوعی"
+                    className="w-full bg-transparent border-none focus:ring-0 text-sm font-medium outline-none"
+                    value={settings.aiName}
+                    onChange={(e) => setSettings({...settings, aiName: e.target.value})}
+                  />
+                 </div>
+               </div>
+               <div className="h-px bg-gray-50 w-full"></div>
+               <div className="flex items-center gap-3">
+                 <i className="fas fa-birthday-cake text-pink-400 w-5"></i>
+                 <div className="flex-1">
+                   <p className="text-[10px] text-gray-400 mb-1">سن هوش مصنوعی</p>
+                   <input 
+                    type="number" 
+                    placeholder="سن"
+                    className="w-full bg-transparent border-none focus:ring-0 text-sm font-medium outline-none"
+                    value={settings.aiAge}
+                    onChange={(e) => setSettings({...settings, aiAge: e.target.value})}
+                  />
+                 </div>
+               </div>
+               <div className="h-px bg-gray-50 w-full"></div>
+               <div className="flex items-center gap-3">
+                 <i className="fas fa-user text-orange-400 w-5"></i>
+                 <div className="flex-1">
+                   <p className="text-[10px] text-gray-400 mb-1">نام شما (کاربر)</p>
+                   <input 
+                    type="text" 
+                    placeholder="نام شما"
+                    className="w-full bg-transparent border-none focus:ring-0 text-sm font-medium outline-none"
+                    value={settings.userName}
+                    onChange={(e) => setSettings({...settings, userName: e.target.value})}
+                  />
+                 </div>
                </div>
             </div>
           </section>
@@ -233,6 +285,20 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ currentSettings, onSave, 
               </div>
               <p className="text-[10px] text-gray-400 text-center">انتخاب از رنگ‌ها یا آپلود عکس دلخواه</p>
             </div>
+          </section>
+
+          {/* Troubleshooting Section */}
+          <section className="pt-4 border-t border-gray-100">
+            <button 
+              onClick={handleClearStorage}
+              className="w-full py-3 bg-red-50 text-red-500 border border-red-100 rounded-2xl text-xs font-bold hover:bg-red-100 transition-colors flex items-center justify-center gap-2"
+            >
+              <i className="fas fa-trash-alt"></i>
+              پاک کردن حافظه مرورگر (رفع خطاها)
+            </button>
+            <p className="text-[9px] text-gray-400 mt-2 text-center leading-relaxed">
+              اگر با خطای Quota Exceeded مواجه شدید یا برنامه به درستی کار نمی‌کند، از این دکمه برای ریست کردن کامل استفاده کنید.
+            </p>
           </section>
         </div>
 
