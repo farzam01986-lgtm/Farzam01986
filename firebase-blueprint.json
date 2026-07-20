@@ -1,0 +1,65 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Stores registered user profile data",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "age": { "type": "string" },
+        "profilePic": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "phone"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Stores individual chat messages",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "text": { "type": "string" },
+        "sender": { "type": "string" },
+        "senderName": { "type": "string" },
+        "senderPic": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "profileId": { "type": "string" },
+        "image": { "type": "string" },
+        "audio": { "type": "string" },
+        "replyTo": { "type": "string" }
+      },
+      "required": ["id", "text", "sender", "profileId"]
+    },
+    "Profile": {
+      "title": "Profile",
+      "description": "Stores chatbot or custom chat partner profiles",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "avatar": { "type": "string" },
+        "role": { "type": "string" },
+        "age": { "type": "string" },
+        "bio": { "type": "string" },
+        "gender": { "type": "string" }
+      },
+      "required": ["id", "name", "avatar"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "User",
+      "description": "Registered users"
+    },
+    "messages/{messageId}": {
+      "schema": "Message",
+      "description": "Central chat messages"
+    },
+    "profiles/{profileId}": {
+      "schema": "Profile",
+      "description": "Chat profiles and personas"
+    }
+  }
+}

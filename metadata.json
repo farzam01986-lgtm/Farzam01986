@@ -1,8 +1,11 @@
 {
-  "name": "Telegram Clone AI Chat",
-  "description": "A high-fidelity Telegram-style chat application with customizable AI personas, backgrounds, and profile pictures, powered by Gemini 3 Flash.",
+  "name": "EXO Messenger",
+  "description": "EXO Messenger - A high-fidelity chat application with customizable AI personas and premium features.",
   "requestFramePermissions": [
     "camera",
     "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
   ]
 }

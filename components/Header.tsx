@@ -8,9 +8,10 @@ interface HeaderProps {
   onOpenSettings: () => void;
   onStartCall: () => void;
   onClearHistory: () => void;
+  onOpenDiagnostic: () => void;
 }
 
-const Header: React.FC<HeaderProps> = ({ name, profilePic, isTyping, onOpenSettings, onStartCall, onClearHistory }) => {
+const Header: React.FC<HeaderProps> = ({ name, profilePic, isTyping, onOpenSettings, onStartCall, onClearHistory, onOpenDiagnostic }) => {
   return (
     <div className="bg-[#517da2] text-white p-3 flex items-center justify-between shadow-md z-10 select-none">
       <div className="flex items-center gap-3">
@@ -33,9 +34,9 @@ const Header: React.FC<HeaderProps> = ({ name, profilePic, isTyping, onOpenSetti
               <span className="text-[#89b3d7] font-medium italic flex items-center gap-1">
                 در حال تایپ
                 <span className="flex gap-0.5 mt-1">
-                  <span className="w-1 h-1 bg-[#89b3d7] rounded-full animate-bounce [animation-delay:-0.3s]"></span>
-                  <span className="w-1 h-1 bg-[#89b3d7] rounded-full animate-bounce [animation-delay:-0.15s]"></span>
-                  <span className="w-1 h-1 bg-[#89b3d7] rounded-full animate-bounce"></span>
+                  <span className="w-1 h-1 bg-[#89b3d7] rounded-full custom-typing-dot"></span>
+                  <span className="w-1 h-1 bg-[#89b3d7] rounded-full custom-typing-dot"></span>
+                  <span className="w-1 h-1 bg-[#89b3d7] rounded-full custom-typing-dot"></span>
                 </span>
               </span>
             ) : (
@@ -45,6 +46,14 @@ const Header: React.FC<HeaderProps> = ({ name, profilePic, isTyping, onOpenSetti
         </div>
       </div>
       <div className="flex items-center gap-1 text-xl">
+        <button 
+          onClick={onOpenDiagnostic}
+          className="p-2 opacity-90 hover:opacity-100 hover:bg-black/10 text-green-300 hover:text-green-200 rounded-full transition-all relative flex items-center justify-center"
+          title="سیستم پایش و علیب‌یابی خودکار"
+        >
+          <i className="fas fa-shield-alt text-lg"></i>
+          <span className="absolute top-1 right-1 w-2 h-2 bg-green-400 rounded-full animate-ping"></span>
+        </button>
         <button 
           onClick={onStartCall}
           className="p-2 opacity-90 hover:opacity-100 hover:bg-black/10 rounded-full transition-all"
